@@ -15,4 +15,4 @@ Program Installer: A built-in feature to install a selection of common programs 
 
 # How to Download & use
 
-Head on over to [Released](https://github.com/luciellexo/Lucis-Box_Windows-11/releases), download the .exe file, run it as an administrator, and get started.
+Head on over to [Releases](https://github.com/luciellexo/Lucis-Box_Windows-11/releases), download the .exe file, run it as an administrator, and get started.
