@@ -13,5 +13,6 @@ Revert Changes: A one-click option to restore all settings to their original sta
 
 Program Installer: A built-in feature to install a selection of common programs like 7-Zip, VLC, and Notepad++ directly from the GUI.
 
-# How to Use
-To use, download the .exe file, run it as an administrator, and get started.
+# How to Download & use
+
+Head on over to [Released](https://github.com/luciellexo/Lucis-Box_Windows-11/releases), download the .exe file, run it as an administrator, and get started.
