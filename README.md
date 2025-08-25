@@ -1,4 +1,4 @@
-# Luci's Box - Windows 11 Essential Tool
+# Luci's Box - Windows 11
 This tool is designed for every Windows 11 fresh install. It helps you quickly and safely set up your system, especially on devices where standard hardware requirements like TPM or Secure Boot have been bypassed. The tool has a clean graphical interface (GUI), so no command-line knowledge is needed.
 
 # Features:
