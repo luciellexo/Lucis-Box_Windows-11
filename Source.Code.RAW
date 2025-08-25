@@ -1,0 +1,464 @@
+if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Start-Process powershell.exe "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
+    exit
+}
+
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+function Install-PackageManagers {
+    Write-Host "Checking for winget and chocolatey..."
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Write-Host "winget not found. Checking for chocolatey..."
+        if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
+            Write-Host "Neither winget nor chocolatey found. Attempting to install winget..."
+            try {
+                $latestMsixBundleUri = $(Invoke-RestMethod https://api.github.com/repos/microsoft/winget-cli/releases/latest).assets.browser_download_url | Where-Object { $_.EndsWith(".msixbundle") }
+                if ($latestMsixBundleUri) {
+                    Write-Host "Downloading winget..."
+                    $fileName = $latestMsixBundleUri.Split("/")[-1]
+                    Invoke-WebRequest -Uri $latestMsixBundleUri -OutFile $fileName -UseBasicParsing
+                    Write-Host "Installing winget..."
+                    Add-AppxPackage $fileName
+                    Remove-Item $fileName
+                    Write-Host "winget has been installed."
+                }
+            } catch {
+                Write-Error "Failed to install winget. Attempting to install Chocolatey as a fallback: $_"
+                try {
+                    Set-ExecutionPolicy Bypass -Scope Process -Force
+                    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+                    iwr https://community.chocolatey.org/install.ps1 -UseBasicParsing | iex
+                    Write-Host "Chocolatey has been installed."
+                } catch {
+                    Write-Error "Failed to install a package manager. Please install winget or chocolatey manually."
+                }
+            }
+        }
+    }
+}
+
+Install-PackageManagers
+
+function Disable-MicrosoftDefender {
+    try {
+        Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction Stop
+        Set-MpPreference -SubmitSamplesConsent NeverSend
+        Set-MpPreference -DisableBehaviorMonitoring $true
+        Set-MpPreference -DisableIOAVProtection $true
+        Write-Output "Microsoft Defender has been disabled."
+    } catch { Write-Error "Failed to disable Microsoft Defender: $_" }
+}
+
+function Disable-UAC {
+    try {
+        Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "ConsentPromptBehaviorAdmin" -Value 0 -ErrorAction Stop
+        Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "EnableLUA" -Value 0 -ErrorAction Stop
+        Write-Output "User Account Control (UAC) has been disabled."
+    } catch { Write-Error "Failed to disable UAC: $_" }
+}
+
+function Disable-SmartScreen {
+    try {
+        Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" -Name "SmartScreenEnabled" -Value "Off" -ErrorAction Stop
+        New-Item -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows" -Name "System" -ErrorAction SilentlyContinue | Out-Null
+        Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\System" -Name "EnableSmartScreen" -Value 0 -ErrorAction Stop
+        Write-Output "SmartScreen has been disabled."
+    } catch { Write-Error "Failed to disable SmartScreen: $_" }
+}
+
+function Disable-WindowsSearchIndexing {
+    try {
+        Stop-Service wsearch -ErrorAction Stop
+        Set-Service -Name wsearch -StartupType Disabled
+        Write-Output "Windows Search Indexing has been disabled."
+    } catch { Write-Error "Failed to disable Windows Search Indexing: $_" }
+}
+
+function Disable-WindowsTipsAndTricks {
+    try {
+        $path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"
+        if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
+        Set-ItemProperty -Path $path -Name "SubscribedContent-338393Enabled" -Value 0 -ErrorAction Stop
+        Set-ItemProperty -Path $path -Name "SubscribedContent-338394Enabled" -Value 0 -ErrorAction Stop
+        Write-Output "Windows Tips and Tricks have been disabled."
+    } catch { Write-Error "Failed to disable Windows Tips and Tricks: $_" }
+}
+
+function Disable-WindowsUpdates {
+    try {
+        Stop-Service -Name wuauserv -Force -ErrorAction Stop
+        Set-Service -Name wuauserv -StartupType Disabled
+        Write-Output "Windows Update service has been disabled."
+    } catch { Write-Error "Failed to disable the Windows Update service: $_" }
+}
+
+function Disable-Telemetry {
+    try {
+        Stop-Service DiagTrack -ErrorAction Stop
+        Set-Service -Name DiagTrack -StartupType Disabled
+        $path = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection"
+        if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
+        Set-ItemProperty -Path $path -Name "AllowTelemetry" -Value 0 -ErrorAction Stop
+        Write-Output "Telemetry services and data collection have been disabled."
+    } catch { Write-Error "Failed to disable telemetry: $_" }
+}
+
+function Disable-AdvertisingID {
+    try {
+        $path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo"
+        if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
+        Set-ItemProperty -Path $path -Name "Enabled" -Value 0 -ErrorAction Stop
+        Write-Output "Personalized advertising ID has been disabled."
+    } catch { Write-Error "Failed to disable advertising ID: $_" }
+}
+
+function Disable-Hibernation {
+    try {
+        powercfg.exe /h off
+        Write-Output "Hibernation has been disabled."
+    } catch { Write-Error "Failed to disable hibernation: $_" }
+}
+
+
+function Enable-TaskbarUnalign {
+    try {
+        Set-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced -Name "TaskbarAl" -Value 0 -ErrorAction Stop
+        Stop-Process -Name explorer -Force
+        Write-Output "Taskbar alignment has been changed to left."
+    } catch { Write-Error "Failed to change taskbar alignment: $_" }
+}
+
+function Disable-WidgetButton {
+    try {
+        Set-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced -Name "TaskbarDa" -Value 0 -ErrorAction Stop
+        Write-Output "Widgets button has been disabled."
+    } catch { Write-Error "Failed to disable widgets button: $_" }
+}
+
+function Disable-ChatButton {
+    try {
+        Set-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced -Name "TaskbarCo" -Value 0 -ErrorAction Stop
+        Write-Output "Chat button has been disabled."
+    } catch { Write-Error "Failed to disable chat button: $_" }
+}
+
+function Disable-PrintSpooler {
+    try {
+        Set-Service -Name Spooler -StartupType Disabled -ErrorAction Stop
+        Stop-Service -Name Spooler -Force -ErrorAction Stop
+        Write-Output "Print Spooler service disabled."
+    } catch { Write-Error "Failed to disable Print Spooler: $_" }
+}
+
+function Disable-FaxService {
+    try {
+        Set-Service -Name Fax -StartupType Disabled -ErrorAction Stop
+        Stop-Service -Name Fax -Force -ErrorAction Stop
+        Write-Output "Fax service disabled."
+    } catch { Write-Error "Failed to disable Fax service: $_" }
+}
+
+function Disable-XboxServices {
+    try {
+        $services = "XboxGipSvc", "XboxNetApiSvc", "GamingServices", "XblAuthManager", "XblGameSave"
+        foreach ($svc in $services) {
+            Set-Service -Name $svc -StartupType Disabled -ErrorAction SilentlyContinue
+            Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue
+        }
+        Write-Output "Xbox services disabled."
+    } catch { Write-Error "Failed to disable Xbox services: $_" }
+}
+
+function Disable-GameBar {
+    try {
+        Set-ItemProperty -Path "HKCU:\Software\Microsoft\GameBar" -Name "AllowAutoGameMode" -Value 0 -ErrorAction Stop
+        Set-ItemProperty -Path "HKCU:\Software\Microsoft\GameBar" -Name "ShowStartupPanel" -Value 0 -ErrorAction Stop
+        Write-Output "Game Bar and Game Mode disabled."
+    } catch { Write-Error "Failed to disable Game Bar: $_" }
+}
+
+function Disable-Cortana {
+    try {
+        Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search" -Name "AllowCortana" -Value 0 -ErrorAction Stop
+        Write-Output "Cortana disabled."
+    } catch { Write-Error "Failed to disable Cortana: $_" }
+}
+
+function Disable-VisualEffects {
+    try {
+        $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects"
+        if (-not (Test-Path $regPath)) { New-Item -Path $regPath -Force | Out-Null }
+        Set-ItemProperty -Path $regPath -Name "VisualEffects" -Value 0 -ErrorAction Stop
+        Write-Output "Visual effects disabled."
+    } catch { Write-Error "Failed to disable visual effects: $_" }
+}
+
+function Remove-OneDrive {
+    try {
+        taskkill /f /im OneDrive.exe
+        $appxPackage = Get-AppxPackage -Name "*OneDrive*" | Where-Object { $_.PackageFamilyName -like "*OneDrive*" }
+        if ($appxPackage) {
+            Remove-AppxPackage -Package $appxPackage.PackageFullName
+        }
+        $oneDrivePath = "$env:SystemRoot\SysWOW64\OneDriveSetup.exe"
+        if (Test-Path $oneDrivePath) {
+            Start-Process -FilePath $oneDrivePath -ArgumentList "/uninstall" -Wait -NoNewWindow
+        }
+        Write-Output "OneDrive removed."
+    } catch { Write-Error "Failed to remove OneDrive: $_" }
+}
+
+function Remove-Onenote {
+    try {
+        Get-AppxPackage -Name "*OneNote*" | Remove-AppxPackage
+        Write-Output "OneNote removed."
+    } catch { Write-Error "Failed to remove OneNote: $_" }
+}
+
+function Remove-MailAndCalendar {
+    try {
+        Get-AppxPackage -Name "*communicationsapps*" | Remove-AppxPackage
+        Write-Output "Mail and Calendar apps removed."
+    } catch { Write-Error "Failed to remove Mail and Calendar: $_" }
+}
+
+function Remove-XboxApps {
+    try {
+        Get-AppxPackage -Name "*xbox*" | Remove-AppxPackage
+        Write-Output "All Xbox apps removed."
+    } catch { Write-Error "Failed to remove Xbox apps: $_" }
+}
+
+function Revert-AllChanges {
+    Write-Host "Reverting all changes..."
+    try {
+        Set-MpPreference -DisableRealtimeMonitoring $false
+        Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "ConsentPromptBehaviorAdmin" -Value 5
+        Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "EnableLUA" -Value 1
+        Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" -Name "SmartScreenEnabled" -Value "RequireAdmin"
+        Write-Output "Security features re-enabled."
+    } catch { Write-Error "Could not re-enable all security features." }
+
+    try {
+        Set-Service -Name wsearch -StartupType AutomaticDelayedStart
+        Start-Service wsearch
+        Write-Output "Windows Search re-enabled."
+    } catch { Write-Error "Could not re-enable Windows Search." }
+
+    try {
+        Set-Service -Name wuauserv -StartupType AutomaticDelayedStart
+        Start-Service wuauserv
+        Write-Output "Windows Update service re-enabled."
+    } catch { Write-Error "Could not re-enable Windows Update service." }
+
+    try {
+        Set-Service -Name DiagTrack -StartupType Automatic
+        Start-Service DiagTrack
+        $path = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection"
+        if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
+        Set-ItemProperty -Path $path -Name "AllowTelemetry" -Value 3
+        $adPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo"
+        if (Test-Path $adPath) { Set-ItemProperty -Path $adPath -Name "Enabled" -Value 1 }
+        Write-Output "Privacy settings reverted to default."
+    } catch { Write-Error "Could not revert privacy settings." }
+
+    try {
+        powercfg.exe /h on
+        Write-Output "Hibernation re-enabled."
+    } catch { Write-Error "Could not re-enable hibernation." }
+
+    try {
+        Set-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced -Name "TaskbarAl" -Value 1
+        Stop-Process -Name explorer -Force
+        Write-Output "Taskbar alignment reverted."
+    } catch { Write-Error "Could not revert taskbar alignment." }
+
+    $taskName = "Luci's Windows 11 Optimization Toolbox"
+    if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+        Write-Output "Scheduled task '$taskName' has been deleted."
+    }
+}
+
+$form = New-Object System.Windows.Forms.Form
+$form.Text = "Luci's Box - All-In-One"
+$form.Size = New-Object System.Drawing.Size(650, 480)
+$form.StartPosition = "CenterScreen"
+$form.FormBorderStyle = 'FixedSingle'
+$form.MaximizeBox = $false
+
+$tabControl = New-Object System.Windows.Forms.TabControl
+$tabControl.Location = New-Object System.Drawing.Point(10, 10)
+$tabControl.Size = New-Object System.Drawing.Size(610, 360)
+
+$tabSecurity = New-Object System.Windows.Forms.TabPage
+$tabSecurity.Text = "Security"
+$groupSec = New-Object System.Windows.Forms.GroupBox; $groupSec.Text = "Security Features"; $groupSec.Size = New-Object System.Drawing.Size(580, 250); $groupSec.Location = New-Object System.Drawing.Point(10, 10)
+$chkDefender = New-Object System.Windows.Forms.CheckBox; $chkDefender.Text = "Disable Microsoft Defender"; $chkDefender.Location = New-Object System.Drawing.Point(20, 30); $chkDefender.AutoSize = $true
+$chkUAC = New-Object System.Windows.Forms.CheckBox; $chkUAC.Text = "Disable UAC (User Account Control)"; $chkUAC.Location = New-Object System.Drawing.Point(20, 60); $chkUAC.AutoSize = $true
+$chkSmartScreen = New-Object System.Windows.Forms.CheckBox; $chkSmartScreen.Text = "Disable SmartScreen Filter"; $chkSmartScreen.Location = New-Object System.Drawing.Point(20, 90); $chkSmartScreen.AutoSize = $true
+$chkKeepDisabled = New-Object System.Windows.Forms.CheckBox; $chkKeepDisabled.Text = "Keep disabled via Scheduled Task (persists after reboot)"; $chkKeepDisabled.Location = New-Object System.Drawing.Point(20, 130); $chkKeepDisabled.AutoSize = $true; $chkKeepDisabled.Checked = $true
+$groupSec.Controls.AddRange(@($chkDefender, $chkUAC, $chkSmartScreen, $chkKeepDisabled))
+$tabSecurity.Controls.Add($groupSec)
+
+$tabPerformance = New-Object System.Windows.Forms.TabPage
+$tabPerformance.Text = "Performance"
+$groupPerf = New-Object System.Windows.Forms.GroupBox; $groupPerf.Text = "Performance Optimizations"; $groupPerf.Size = New-Object System.Drawing.Size(580, 250); $groupPerf.Location = New-Object System.Drawing.Point(10, 10)
+$chkSearchIndexing = New-Object System.Windows.Forms.CheckBox; $chkSearchIndexing.Text = "Disable Windows Search Indexing Service"; $chkSearchIndexing.Location = New-Object System.Drawing.Point(20, 30); $chkSearchIndexing.AutoSize = $true
+$chkTipsAndTricks = New-Object System.Windows.Forms.CheckBox; $chkTipsAndTricks.Text = "Disable Windows Tips, Tricks, and Suggestions"; $chkTipsAndTricks.Location = New-Object System.Drawing.Point(20, 60); $chkTipsAndTricks.AutoSize = $true
+$chkHibernation = New-Object System.Windows.Forms.CheckBox; $chkHibernation.Text = "Disable Hibernation (saves disk space)"; $chkHibernation.Location = New-Object System.Drawing.Point(20, 90); $chkHibernation.AutoSize = $true
+$chkVisualEffects = New-Object System.Windows.Forms.CheckBox; $chkVisualEffects.Text = "Disable Unnecessary Visual Effects"; $chkVisualEffects.Location = New-Object System.Drawing.Point(20, 120); $chkVisualEffects.AutoSize = $true
+$groupPerf.Controls.AddRange(@($chkSearchIndexing, $chkTipsAndTricks, $chkHibernation, $chkVisualEffects))
+$tabPerformance.Controls.Add($groupPerf)
+
+$tabUpdatesPrivacy = New-Object System.Windows.Forms.TabPage
+$tabUpdatesPrivacy.Text = "Updates & Privacy"
+$groupUpdates = New-Object System.Windows.Forms.GroupBox; $groupUpdates.Text = "Update Settings"; $groupUpdates.Size = New-Object System.Drawing.Size(580, 80); $groupUpdates.Location = New-Object System.Drawing.Point(10, 10)
+$chkUpdates = New-Object System.Windows.Forms.CheckBox; $chkUpdates.Text = "Disable Automatic Windows Updates (wuauserv service)"; $chkUpdates.Location = New-Object System.Drawing.Point(20, 30); $chkUpdates.AutoSize = $true
+$groupUpdates.Controls.Add($chkUpdates)
+$groupPrivacy = New-Object System.Windows.Forms.GroupBox; $groupPrivacy.Text = "Privacy Settings"; $groupPrivacy.Size = New-Object System.Drawing.Size(580, 150); $groupPrivacy.Location = New-Object System.Drawing.Point(10, 100)
+$chkTelemetry = New-Object System.Windows.Forms.CheckBox; $chkTelemetry.Text = "Disable Telemetry and Data Collection (DiagTrack service)"; $chkTelemetry.Location = New-Object System.Drawing.Point(20, 30); $chkTelemetry.AutoSize = $true
+$chkAdID = New-Object System.Windows.Forms.CheckBox; $chkAdID.Text = "Disable Personalized Advertising ID"; $chkAdID.Location = New-Object System.Drawing.Point(20, 60); $chkAdID.AutoSize = $true
+$chkCortana = New-Object System.Windows.Forms.CheckBox; $chkCortana.Text = "Disable Cortana"; $chkCortana.Location = New-Object System.Drawing.Point(20, 90); $chkCortana.AutoSize = $true
+$groupPrivacy.Controls.AddRange(@($chkTelemetry, $chkAdID, $chkCortana))
+$tabUpdatesPrivacy.Controls.AddRange(@($groupUpdates, $groupPrivacy))
+
+$tabLookFeel = New-Object System.Windows.Forms.TabPage
+$tabLookFeel.Text = "Look & Feel"
+$groupVisual = New-Object System.Windows.Forms.GroupBox; $groupVisual.Text = "Visual Tweaks"; $groupVisual.Size = New-Object System.Drawing.Size(580, 250); $groupVisual.Location = New-Object System.Drawing.Point(10, 10) 
+$chkTaskbarUnalign = New-Object System.Windows.Forms.CheckBox; $chkTaskbarUnalign.Text = "Align Taskbar to the Left"; $chkTaskbarUnalign.Location = New-Object System.Drawing.Point(20, 60); $chkTaskbarUnalign.AutoSize = $true
+$chkDisableWidgets = New-Object System.Windows.Forms.CheckBox; $chkDisableWidgets.Text = "Hide Taskbar Widgets Button"; $chkDisableWidgets.Location = New-Object System.Drawing.Point(20, 90); $chkDisableWidgets.AutoSize = $true
+$chkDisableChat = New-Object System.Windows.Forms.CheckBox; $chkDisableChat.Text = "Hide Taskbar Chat Button"; $chkDisableChat.Location = New-Object System.Drawing.Point(20, 120); $chkDisableChat.AutoSize = $true
+$groupVisual.Controls.AddRange(@($chkClassicContextMenu, $chkTaskbarUnalign, $chkDisableWidgets, $chkDisableChat))
+$tabLookFeel.Controls.Add($groupVisual)
+
+$tabServicesBloatware = New-Object System.Windows.Forms.TabPage
+$tabServicesBloatware.Text = "Services & Bloatware"
+$groupServices = New-Object System.Windows.Forms.GroupBox; $groupServices.Text = "Disable Unnecessary Services"; $groupServices.Size = New-Object System.Drawing.Size(280, 250); $groupServices.Location = New-Object System.Drawing.Point(10, 10)
+$chkPrintSpooler = New-Object System.Windows.Forms.CheckBox; $chkPrintSpooler.Text = "Disable Print Spooler"; $chkPrintSpooler.Location = New-Object System.Drawing.Point(20, 30); $chkPrintSpooler.AutoSize = $true
+$chkFaxService = New-Object System.Windows.Forms.CheckBox; $chkFaxService.Text = "Disable Fax Service"; $chkFaxService.Location = New-Object System.Drawing.Point(20, 60); $chkFaxService.AutoSize = $true
+$chkXboxServices = New-Object System.Windows.Forms.CheckBox; $chkXboxServices.Text = "Disable Xbox Services"; $chkXboxServices.Location = New-Object System.Drawing.Point(20, 90); $chkXboxServices.AutoSize = $true
+$chkGameBar = New-Object System.Windows.Forms.CheckBox; $chkGameBar.Text = "Disable Game Bar"; $chkGameBar.Location = New-Object System.Drawing.Point(20, 120); $chkGameBar.AutoSize = $true
+$groupServices.Controls.AddRange(@($chkPrintSpooler, $chkFaxService, $chkXboxServices, $chkGameBar))
+$tabServicesBloatware.Controls.Add($groupServices)
+
+$groupBloatware = New-Object System.Windows.Forms.GroupBox; $groupBloatware.Text = "Remove Bloatware"; $groupBloatware.Size = New-Object System.Drawing.Size(280, 250); $groupBloatware.Location = New-Object System.Drawing.Point(300, 10)
+$chkOneDrive = New-Object System.Windows.Forms.CheckBox; $chkOneDrive.Text = "Remove OneDrive"; $chkOneDrive.Location = New-Object System.Drawing.Point(20, 30); $chkOneDrive.AutoSize = $true
+$chkOnenote = New-Object System.Windows.Forms.CheckBox; $chkOnenote.Text = "Remove OneNote"; $chkOnenote.Location = New-Object System.Drawing.Point(20, 60); $chkOnenote.AutoSize = $true
+$chkMailAndCalendar = New-Object System.Windows.Forms.CheckBox; $chkMailAndCalendar.Text = "Remove Mail and Calendar"; $chkMailAndCalendar.Location = New-Object System.Drawing.Point(20, 90); $chkMailAndCalendar.AutoSize = $true
+$chkXboxApps = New-Object System.Windows.Forms.CheckBox; $chkXboxApps.Text = "Remove Xbox Apps"; $chkXboxApps.Location = New-Object System.Drawing.Point(20, 120); $chkXboxApps.AutoSize = $true
+$groupBloatware.Controls.AddRange(@($chkOneDrive, $chkOnenote, $chkMailAndCalendar, $chkXboxApps))
+$tabServicesBloatware.Controls.Add($groupBloatware)
+
+$tabInstaller = New-Object System.Windows.Forms.TabPage
+$tabInstaller.Text = "Program Installer"
+$groupInstall = New-Object System.Windows.Forms.GroupBox; $groupInstall.Text = "Install Common Programs via Winget"; $groupInstall.Size = New-Object System.Drawing.Size(580, 250); $groupInstall.Location = New-Object System.Drawing.Point(10, 10)
+
+$programs = @{
+    "Google Chrome" = "Google.Chrome"; "Firefox" = "Mozilla.Firefox"; "Brave" = "Brave.Brave";
+    "VLC" = "VideoLAN.VLC"; "Spotify" = "Spotify.Spotify"; "Discord" = "Discord.Discord"; "Zoom" = "Zoom.Zoom";
+    "7-Zip" = "7zip.7zip"; "WinRAR" = "RARLab.WinRAR"; "PowerToys" = "Microsoft.PowerToys"; "ShareX" = "ShareX.ShareX"; "Greenshot" = "Greenshot.Greenshot"; "OBS Studio" = "OBSProject.OBSStudio";
+    "VS Code" = "Microsoft.VisualStudioCode"; "Git" = "Git.Git"; "Python" = "Python.Python.3.11"; "Node.js LTS" = "OpenJS.Nodejs.LTS";
+    "Notepad++" = "Notepad++.Notepad++"; "LibreOffice" = "TheDocumentFoundation.LibreOffice"; "VeraCrypt" = "VeraCrypt.VeraCrypt";
+    "VC++ Runtimes" = "Microsoft.VCRedist.2015+.x64"; ".NET 8 Runtime" = "Microsoft.DotNet.DesktopRuntime.8"
+}
+$programCheckboxes = @{}
+$col1_y = 30; $col2_y = 30; $col3_y = 30;
+$i = 0
+foreach ($name in $programs.Keys) {
+    $chk = New-Object System.Windows.Forms.CheckBox; $chk.Text = $name; $chk.Tag = $programs[$name]; $chk.AutoSize = $true
+    if ($i % 3 -eq 0) { $chk.Location = New-Object System.Drawing.Point(20, $col1_y); $col1_y += 30 }
+    elseif ($i % 3 -eq 1) { $chk.Location = New-Object System.Drawing.Point(210, $col2_y); $col2_y += 30 }
+    else { $chk.Location = New-Object System.Drawing.Point(400, $col3_y); $col3_y += 30 }
+    $programCheckboxes.Add($name, $chk); $i++
+}
+$groupInstall.Controls.AddRange($programCheckboxes.Values)
+$tabInstaller.Controls.Add($groupInstall)
+
+$tabControl.TabPages.AddRange(@($tabSecurity, $tabPerformance, $tabUpdatesPrivacy, $tabLookFeel, $tabServicesBloatware, $tabInstaller))
+
+$btnApply = New-Object System.Windows.Forms.Button; $btnApply.Text = "Apply Selected Changes"; $btnApply.Location = New-Object System.Drawing.Point(130, 390); $btnApply.Size = New-Object System.Drawing.Size(180, 40)
+$btnRevert = New-Object System.Windows.Forms.Button; $btnRevert.Text = "Revert All Changes"; $btnRevert.Location = New-Object System.Drawing.Point(320, 390); $btnRevert.Size = New-Object System.Drawing.Size(180, 40)
+$form.Controls.Add($tabControl); $form.Controls.Add($btnApply); $form.Controls.Add($btnRevert)
+
+$linkGitHub = New-Object System.Windows.Forms.LinkLabel; $linkGitHub.Text = "GitHub Repo"; $linkGitHub.Location = New-Object System.Drawing.Point(10, 440); $linkGitHub.AutoSize = $true
+$linkGitHub.Add_LinkClicked({
+    [System.Diagnostics.Process]::Start("https://github.com/luciellexo/Lucis-Box_Windows-11_Essential-Tool")
+})
+$form.Controls.Add($linkGitHub)
+$labelCredit = New-Object System.Windows.Forms.Label; $labelCredit.Text = "made by lucixo"; $labelCredit.Location = New-Object System.Drawing.Point(540, 440); $labelCredit.AutoSize = $true
+$form.Controls.Add($labelCredit)
+
+$btnApply.Add_Click({
+    $form.Enabled = $false
+    $commandsToRun = New-Object System.Collections.ArrayList
+    
+    if ($chkDefender.Checked) {
+        $warning = "WARNING: Disabling Windows Defender may leave your system vulnerable to viruses, malware, and other security threats. This action is not recommended for most users." + [System.Environment]::NewLine + [System.Environment]::NewLine + "By continuing, you acknowledge that you are solely responsible for any damage or security risks that may occur. I assume zero liability for any issues." + [System.Environment]::NewLine + [System.Environment]::NewLine + "Do you still want to disable Windows Defender?"
+        $result = [System.Windows.Forms.MessageBox]::Show($warning, "Warning: Security Risk", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Warning)
+        if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
+            Disable-MicrosoftDefender
+            $commandsToRun.Add("Disable-MicrosoftDefender") | Out-Null
+        }
+    }
+
+    if ($chkUAC.Checked) { Disable-UAC; $commandsToRun.Add("Disable-UAC") | Out-Null }
+    if ($chkSmartScreen.Checked) { Disable-SmartScreen; $commandsToRun.Add("Disable-SmartScreen") | Out-Null }
+    
+    if ($chkKeepDisabled.Checked -and $commandsToRun.Count -gt 0) {
+        $taskName = "Luci's Windows 11 Optimization Toolbox"
+        $commandString = "function Disable-MicrosoftDefender { $(Get-Content Function:\Disable-MicrosoftDefender) }; function Disable-UAC { $(Get-Content Function:\Disable-UAC) }; function Disable-SmartScreen { $(Get-Content Function:\Disable-SmartScreen) }; "
+        $commandString += $commandsToRun -join '; '
+        $action = New-ScheduledTaskAction -Execute 'PowerShell.exe' -Argument "-NoProfile -WindowStyle Hidden -Command `"$commandString`""
+        $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -RunLevel Highest
+        $trigger = New-ScheduledTaskTrigger -AtLogon
+        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Force -ErrorAction SilentlyContinue | Out-Null
+    }
+
+    if ($chkSearchIndexing.Checked) { Disable-WindowsSearchIndexing }
+    if ($chkTipsAndTricks.Checked) { Disable-WindowsTipsAndTricks }
+    if ($chkHibernation.Checked) { Disable-Hibernation }
+    if ($chkVisualEffects.Checked) { Disable-VisualEffects }
+
+    if ($chkUpdates.Checked) { Disable-WindowsUpdates }
+    if ($chkTelemetry.Checked) { Disable-Telemetry }
+    if ($chkAdID.Checked) { Disable-AdvertisingID }
+    if ($chkCortana.Checked) { Disable-Cortana }
+
+    if ($chkClassicContextMenu.Checked) { Enable-ClassicContextMenu }
+    if ($chkTaskbarUnalign.Checked) { Enable-TaskbarUnalign }
+    if ($chkDisableWidgets.Checked) { Disable-WidgetButton }
+    if ($chkDisableChat.Checked) { Disable-ChatButton }
+
+    if ($chkPrintSpooler.Checked) { Disable-PrintSpooler }
+    if ($chkFaxService.Checked) { Disable-FaxService }
+    if ($chkXboxServices.Checked) { Disable-XboxServices }
+    if ($chkGameBar.Checked) { Disable-GameBar }
+    if ($chkOneDrive.Checked) { Remove-OneDrive }
+    if ($chkOnenote.Checked) { Remove-Onenote }
+    if ($chkMailAndCalendar.Checked) { Remove-MailAndCalendar }
+    if ($chkXboxApps.Checked) { Remove-XboxApps }
+
+    foreach ($chk in $programCheckboxes.Values) {
+        if ($chk.Checked) {
+            Write-Host "Installing $($chk.Text)..."
+            Start-Process winget -ArgumentList "install --id $($chk.Tag) -e --accept-package-agreements --accept-source-agreements" -Wait -NoNewWindow
+        }
+    }
+    
+    $form.Enabled = $true
+    [System.Windows.Forms.MessageBox]::Show("Selected changes have been applied.", "Operation Complete")
+})
+
+$btnRevert.Add_Click({
+    $confirmation = [System.Windows.Forms.MessageBox]::Show("Are you sure you want to revert all changes to their system defaults? This will re-enable Defender, UAC, updates, etc.", "Confirm Revert", "YesNo", "Warning")
+    if ($confirmation -eq "Yes") {
+        $form.Enabled = $false
+        Revert-AllChanges
+        $form.Enabled = $true
+        [System.Windows.Forms.MessageBox]::Show("All changes have been reverted to system defaults.", "Revert Complete")
+    }
+})
+
+[void]$form.ShowDialog()
